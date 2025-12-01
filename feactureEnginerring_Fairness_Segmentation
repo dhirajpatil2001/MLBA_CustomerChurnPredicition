@@ -1,38 +1,170 @@
-A. Code: Add temporal feature engineering
-df['usage_change'] = df['usage_last_month'] - df['usage_prev_month']
-df['support_call_change'] = df['support_calls_current'] - df['support_calls_prev']
-df['payment_delay_trend'] = df['payment_delay_current'] - df['payment_delay_prev']
-df['usage_change'] = df['usage_frequency'].diff().fillna(0)
-df['payment_delay_trend'] = df['payment_delay'].rolling(2).apply(lambda x: x.iloc[1] - x.iloc[0]).fillna(0)
+churn_model_full_pipeline.ipynb
 
-B. Code: Add segmentation performance
+# 1. Average Spend per Month
+# ---------------------------
+df["AvgSpendPerMonth"] = df["Total Spend"] / df["Tenure"].replace(0, 1)
+
+# ---------------------------
+# 2. Payment Delay Flag
+# ---------------------------
+df["HasDelay"] = (df["Payment Delay"] > 0).astype(int)
+
+# ---------------------------
+# 3. Support Call Complaint Flag
+# ---------------------------
+df["HasComplaint"] = (df["Support Calls"] > 0).astype(int)
+
+# ---------------------------
+# 4. Tenure Category
+# ---------------------------
+def tenure_bucket(x):
+    if x < 6: 
+        return "New"
+    elif x < 24:
+        return "Mid"
+    else:
+        return "Long"
+
+df["TenureCategory"] = df["Tenure"].apply(tenure_bucket)
+
+# ---------------------------
+# 5. Days Since Last Interaction (if it's a date)
+# ---------------------------
+# Convert to datetime
+df["Last Interaction"] = pd.to_datetime(df["Last Interaction"], errors='coerce')
+
+# Create feature
+df["DaysSinceLastInteraction"] = (df["Last Interaction"].max() - df["Last Interaction"]).dt.days
+
+# Show updated dataframe
+display(df.head())
+
+
+# Identify possible last interaction column
+possible_cols = [col for col in df.columns if 'last' in col.lower() and 'inter' in col.lower()]
+
+print("Detected column:", possible_cols)
+
+if len(possible_cols) == 0:
+    print(" No 'Last Interaction' column found! Check df.columns output.")
+else:
+    last_col = possible_cols[0]   # take the first match
+    print("Using column:", last_col)
+
+    # Convert to datetime
+    df[last_col] = pd.to_datetime(df[last_col], errors='coerce')
+    df['DaysSinceLastInteraction'] = (df[last_col].max() - df[last_col]).dt.days
+
+    # Drop original column
+    df = df.drop(columns=[last_col])
+
+
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 
-segments = df['ARPU_segment'].unique()
-for seg in segments:
-    X_seg = X_test[df_test['ARPU_segment'] == seg]
-    y_seg = y_test[df_test['ARPU_segment'] == seg]
-    preds = model.predict(X_seg)
-    print(seg)
-    print(classification_report(y_seg, preds))
+# ---------------------------------------------------------
+# 1. LOAD DATA
+# ---------------------------------------------------------
+df = pd.read_csv("customer_churn_dataset_MASTER.csv")
 
-C. Code: Add fairness evaluation
-groups = df_test['gender'].unique()
-for g in groups:
-    Xg = X_test[df_test['gender'] == g]
-    yg = y_test[df_test['gender'] == g]
-    predg = model.predict(Xg)
-    print(f"Group={g}")
-    print(classification_report(yg, predg))
+# ---------------------------------------------------------
+# 2. FEATURE ENGINEERING
+# ---------------------------------------------------------
 
-D. Code: Add small hyperparameter tuning (enough for originality)
-from sklearn.model_selection import GridSearchCV
+# Avg Spend Per Month
+df["AvgSpendPerMonth"] = df["Total Spend"] / (df["Tenure"].replace(0, 1))
 
-param_grid = {
-    'n_estimators': [200, 500],
-    'max_depth': [10, 20],
-    'max_features': ['sqrt', 'log2']
-}
+# Has Payment Delay (0/1)
+df["HasDelay"] = (df["Payment Delay"] > 0).astype(int)
 
-grid = GridSearchCV(RandomForestClassifier(), param_grid, cv=3, scoring='f1')
-grid.fit(X_train, y_train)
+# Has Complaint (0/1)
+df["HasComplaint"] = (df["Support Calls"] > 3).astype(int)
+
+# Tenure Category
+df["TenureCategory"] = pd.cut(
+    df["Tenure"],
+    bins=[0, 12, 36, 1000],
+    labels=["Short", "Mid", "Long"]
+)
+
+# ARPU Segment
+df["ARPU"] = df["Total Spend"] / df["Tenure"].replace(0, 1)
+df["ARPU_segment"] = pd.qcut(df["ARPU"], q=4, labels=["Low", "Mid-Low", "Mid-High", "High"])
+
+# ---------------------------------------------------------
+# 3. LABEL ENCODING
+# ---------------------------------------------------------
+cat_cols = ["Gender", "Subscription Type", "Contract Length", "TenureCategory", "ARPU_segment"]
+
+encoders = {}
+for col in cat_cols:
+    le = LabelEncoder()
+    df[col] = le.fit_transform(df[col].astype(str))
+    encoders[col] = le
+
+
+
+
+# ---------------------------------------------------------
+# 4. TRAIN-TEST SPLIT
+# ---------------------------------------------------------
+X = df.drop(columns=["Churn", "ARPU"])   # ARPU used only for segmenting
+y = df["Churn"]
+
+df_train, df_test, X_train, X_test, y_train, y_test = train_test_split(
+    df, X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+
+
+# ---------------------------------------------------------
+# 5. SCALING
+# ---------------------------------------------------------
+scaler = StandardScaler()
+numeric_cols = ["Age", "Tenure", "Usage Frequency", "Support Calls", "Payment Delay",
+                "Total Spend", "AvgSpendPerMonth"]
+
+X_train[numeric_cols] = scaler.fit_transform(X_train[numeric_cols])
+X_test[numeric_cols] = scaler.transform(X_test[numeric_cols])
+
+
+
+# ---------------------------------------------------------
+# 6. RANDOM FOREST MODEL
+# ---------------------------------------------------------
+model = RandomForestClassifier(n_estimators=300, random_state=42)
+model.fit(X_train, y_train)
+
+# ---------------------------------------------------------
+# 7. BASELINE PERFORMANCE
+# ---------------------------------------------------------
+print("\n=== OVERALL PERFORMANCE ===")
+preds = model.predict(X_test)
+print(classification_report(y_test, preds))
+
+
+
+
+# ---------------------------------------------------------
+# 8. SEGMENTATION PERFORMANCE (ARPU SEGMENTS)
+# ---------------------------------------------------------
+print("\n=== SEGMENT-WISE PERFORMANCE (ARPU Segments) ===")
+for seg_value in df_test["ARPU_segment"].unique():
+    seg_name = encoders["ARPU_segment"].inverse_transform([seg_value])[0]
+    
+    mask = df_test["ARPU_segment"] == seg_value
+    X_seg = X_test[mask]
+    y_seg = y_test[mask]
+    
+    if len(y_seg) == 0:
+        continue
+    
+    preds_seg = model.predict(X_seg)
+    
+    print(f"\n--- Segment: {seg_name} ---")
+    print(classification_report(y_seg, preds_seg))
+

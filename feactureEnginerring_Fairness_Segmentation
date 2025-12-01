@@ -168,3 +168,16 @@ for seg_value in df_test["ARPU_segment"].unique():
     print(f"\n--- Segment: {seg_name} ---")
     print(classification_report(y_seg, preds_seg))
 
+
+## 1. Hyperparameter tuning (brief)
+from sklearn.model_selection import GridSearchCV
+
+rf_params = {'n_estimators': [100, 300, 500], 'max_depth': [None, 10, 20]}
+rf_grid = GridSearchCV(RandomForestClassifier(), rf_params, cv=3, scoring='f1')
+rf_grid.fit(X_train, y_train)
+
+### 2. Calibration
+from sklearn.calibration import CalibratedClassifierCV
+
+rf_calibrated = CalibratedClassifierCV(RandomForestClassifier(n_estimators=300), method='sigmoid', cv=5)
+rf_calibrated.fit(X_train, y_train)

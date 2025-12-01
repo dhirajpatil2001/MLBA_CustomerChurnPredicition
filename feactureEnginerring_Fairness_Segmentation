@@ -1,0 +1,38 @@
+A. Code: Add temporal feature engineering
+df['usage_change'] = df['usage_last_month'] - df['usage_prev_month']
+df['support_call_change'] = df['support_calls_current'] - df['support_calls_prev']
+df['payment_delay_trend'] = df['payment_delay_current'] - df['payment_delay_prev']
+df['usage_change'] = df['usage_frequency'].diff().fillna(0)
+df['payment_delay_trend'] = df['payment_delay'].rolling(2).apply(lambda x: x.iloc[1] - x.iloc[0]).fillna(0)
+
+B. Code: Add segmentation performance
+from sklearn.metrics import classification_report
+
+segments = df['ARPU_segment'].unique()
+for seg in segments:
+    X_seg = X_test[df_test['ARPU_segment'] == seg]
+    y_seg = y_test[df_test['ARPU_segment'] == seg]
+    preds = model.predict(X_seg)
+    print(seg)
+    print(classification_report(y_seg, preds))
+
+C. Code: Add fairness evaluation
+groups = df_test['gender'].unique()
+for g in groups:
+    Xg = X_test[df_test['gender'] == g]
+    yg = y_test[df_test['gender'] == g]
+    predg = model.predict(Xg)
+    print(f"Group={g}")
+    print(classification_report(yg, predg))
+
+D. Code: Add small hyperparameter tuning (enough for originality)
+from sklearn.model_selection import GridSearchCV
+
+param_grid = {
+    'n_estimators': [200, 500],
+    'max_depth': [10, 20],
+    'max_features': ['sqrt', 'log2']
+}
+
+grid = GridSearchCV(RandomForestClassifier(), param_grid, cv=3, scoring='f1')
+grid.fit(X_train, y_train)
